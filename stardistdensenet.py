@@ -64,9 +64,7 @@ def run(cyto_job, parameters):
     job = cyto_job.job
     user = job.userJob
     project = cyto_job.project
-    threshold_set=parameters.cytomine_th_set
     roi_type=parameters.cytomine_roi_type
-    write_hv=parameters.cytomine_write_hv
     modeltype=parameters.cytomine_model
     area_th=parameters.cytomine_area_th
     stardist_model=parameters.stardist_model
