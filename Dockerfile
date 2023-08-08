@@ -31,7 +31,7 @@ RUN pip3 install stardist==0.8.0
 RUN pip3 install protobuf==3.20.*
 
 #INSTALL
-RUN pip3 install numpy
+RUN pip3 install numpy==1.21.*
 RUN pip3 install shapely
 RUN pip3 install tifffile
 RUN pip3 install torch
