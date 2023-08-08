@@ -95,9 +95,9 @@ def run(cyto_job, parameters):
 
     # ----- load network ----
     if modeltype==1: #3k
-        modelname = os.path.join(models_path,"3333nuclei_densenet21_best_model_100ep.pth")
+        modelname = "/models/3333nuclei_densenet21_best_model_100ep.pth"
     elif modeltype==2: #22k
-        modelname = os.path.join(models_path,"22k_nuclei_densenet21_best_model_100ep.pth")
+        modelname = "/models/22k_nuclei_densenet21_best_model_100ep.pth"
 
     
     gpuid = 0
