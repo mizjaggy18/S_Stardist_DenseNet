@@ -77,8 +77,8 @@ def run(cyto_job, parameters):
 
     #Loading pre-trained Stardist model
     # base_path = "{}".format(os.getenv("HOME")) # Mandatory for Singularity
-    base_path = os.getcwd()
-    models_path = os.path.join(base_path,"models/")
+    #base_path = os.getcwd()
+    #models_path = os.path.join(base_path,"models/")
 #     print(base_path)
 #     print(models_path)
 
@@ -89,9 +89,9 @@ def run(cyto_job, parameters):
     # modelsegment = StarDist2D(None, name='2D_versatile_HE', basedir='/models/')
 
     if stardist_model==1:
-        modelsegment = StarDist2D(None, name='2D_versatile_HE', basedir=models_path)
+        modelsegment = StarDist2D(None, name='2D_versatile_HE', basedir='/models/')
     elif stardist_model==2:
-        modelsegment = StarDist2D(None, name='2D_versatile_fluo', basedir=models_path)
+        modelsegment = StarDist2D(None, name='2D_versatile_fluo', basedir='/models/')
 
     # ----- load network ----
     if modeltype==1: #3k
