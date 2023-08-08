@@ -26,7 +26,7 @@ from shapely import wkt
 from glob import glob
 from tifffile import imread
 from cytomine import Cytomine, models, CytomineJob
-from cytomine.models import AbstractImage, Annotation, AnnotationTerm, AnnotationCollection, ImageInstanceCollection, Job, User, JobData, Project, ImageInstance, Property
+from cytomine.models import Annotation, AnnotationTerm, AnnotationCollection, ImageInstanceCollection, Job, User, JobData, Project, ImageInstance, Property
 from cytomine.models.ontology import Ontology, OntologyCollection, Term, RelationTerm, TermCollection
 
 from csbdeep.utils import Path, normalize
@@ -35,6 +35,7 @@ from stardist.models import StarDist2D
 from PIL import Image
 import torch
 from torchvision.models import DenseNet
+from skimage import io, color, filters
 
 # import matplotlib.pyplot as plt
 import time
@@ -52,10 +53,6 @@ __author__ = "WSH Munirah W Ahmad <wshmunirah@gmail.com>"
 __copyright__ = "PN Classification: MFA Fauzi, et al. 2015 (https://doi.org/10.1007/978-3-319-19156-0_17)"
 __version__ = "1.0.1"
 # Stardist (from Cytomine) followed by PN classification and DenseNet Pytorch (Date created: 19 August 2022)
-
-# to run (test): python stardistpndensenet.py --cytomine_host "http://cytomine.mmu.edu.my" --cytomine_public_key "231befd2-41a5-4f70-8c8c-1d4eedb46932" --cytomine_private_key "e8ccd567-a00d-4d7b-8f16-e2c00749f7cc"  --cytomine_id_project "1345" --cytomine_id_software "407937136" --cytomine_id_images "172336244" --cytomine_id_roi_term "1456" --cytomine_id_cell_term '1512' --stardist_prob_t "0.5" --stardist_nms_t "0.5" --stardist_norm_perc_low "1" --stardist_norm_perc_high "99.8" --cytomine_id_c0_term "2716915" --cytomine_id_c1_term "2716923" --cytomine_id_c2_term "2716935" --cytomine_id_c3_term "2716945" --cytomine_th_set "1" --cytomine_roi_type "1" --cytomine_write_hv "0" --cytomine_model "1" --cytomine_area_th "10" --stardist_model "2" 
-
-# to run (PR-IHC): python stardistpndensenet.py --cytomine_host "http://cytomine.mmu.edu.my" --cytomine_public_key "231befd2-41a5-4f70-8c8c-1d4eedb46932" --cytomine_private_key "e8ccd567-a00d-4d7b-8f16-e2c00749f7cc"  --cytomine_id_project "172335168" --cytomine_id_software "407937136" --cytomine_id_images "297955849" --cytomine_id_roi_term "957357" --cytomine_id_cell_term '957390' --stardist_prob_t "0.5" --stardist_nms_t "0.5" --stardist_norm_perc_low "1" --stardist_norm_perc_high "99.8" --cytomine_id_c0_term "2004492" --cytomine_id_c1_term "2004500" --cytomine_id_c2_term "2004506" --cytomine_id_c3_term "2004514" --cytomine_th_set "1" --cytomine_roi_type "1" --cytomine_write_hv "0" --cytomine_model "1" --cytomine_area_th "10" --stardist_model "2" 
 
 def run(cyto_job, parameters):
     logging.info("----- Stardist-PN-DenseNet Pytorch v%s -----", __version__)
@@ -77,17 +74,15 @@ def run(cyto_job, parameters):
 
     #Loading pre-trained Stardist model
     # base_path = "{}".format(os.getenv("HOME")) # Mandatory for Singularity
-    #base_path = os.getcwd()
-    #models_path = os.path.join(base_path,"models/")
+#     base_path = os.getcwd()
+#     models_path = os.path.join(base_path,"models/")
 #     print(base_path)
 #     print(models_path)
 
 
     #Stardist H&E model downloaded from https://github.com/mpicbg-csbd/stardist/issues/46
     #Stardist H&E model downloaded from https://drive.switch.ch/index.php/s/LTYaIud7w6lCyuI
-    # modelsegment = StarDist2D(None, name='2D_versatile_HE', basedir=models_path)   #use local model file in ~/models/2D_versatile_HE/
-    # modelsegment = StarDist2D(None, name='2D_versatile_HE', basedir='/models/')
-
+#     modelsegment = StarDist2D(None, name='2D_versatile_HE', basedir=models_path)   #use local model file in ~/models/2D_versatile_HE/
     if stardist_model==1:
         modelsegment = StarDist2D(None, name='2D_versatile_HE', basedir='/models/')
     elif stardist_model==2:
@@ -156,7 +151,6 @@ def run(cyto_job, parameters):
             imageinfo=ImageInstance(id=id_image,project=parameters.cytomine_id_project)
             imageinfo.fetch()
             calibration_factor=imageinfo.resolution
-            # print(imageinfo.resolution)
             roi_annotations = AnnotationCollection(
                 terms=[parameters.cytomine_id_roi_term],
                 project=parameters.cytomine_id_project,
@@ -169,84 +163,90 @@ def run(cyto_job, parameters):
             #Go over ROI in this image
             #for roi in conn.monitor(roi_annotations, prefix="Running detection on ROI", period=0.1):
             for roi in roi_annotations:
-                #Get Cytomine ROI coordinates for remapping to whole-slide
-                #Cytomine cartesian coordinate system, (0,0) is bottom left corner
-                print("----------------------------ROI------------------------------")
-                roi_geometry = wkt.loads(roi.location)
-                print("ROI Geometry from Shapely: {}".format(roi_geometry))
-                print("ROI Bounds")
-                print(roi_geometry.bounds)
-                min_x=roi_geometry.bounds[0]
-                min_y=roi_geometry.bounds[1]
-                max_x=roi_geometry.bounds[2]
-                max_y=roi_geometry.bounds[3]
-                #Dump ROI image into local PNG file
-                roi_path=os.path.join(working_path,str(roi_annotations.project)+'/'+str(roi_annotations.image)+'/'+str(roi.id))
-                roi_png_filename=os.path.join(roi_path+'/'+str(roi.id)+'.png')
-                print("roi_png_filename: %s" %roi_png_filename)
-                is_algo = User().fetch(roi.user).algo
-                roi.dump(dest_pattern=roi_png_filename,mask=True,alpha=not is_algo)
-                #roi.dump(dest_pattern=os.path.join(roi_path,"{id}.png"), mask=True, alpha=True)
-            
-                #Stardist works with TIFF images without alpha channel, flattening PNG alpha mask to TIFF RGB
-                im=Image.open(roi_png_filename)
-                bg = Image.new("RGB", im.size, (255,255,255))
-                bg.paste(im,mask=im.split()[3])
-                roi_tif_filename=os.path.join(roi_path+'/'+str(roi.id)+'.tif')
-                bg.save(roi_tif_filename,quality=100)
-                X_files = sorted(glob(roi_path+'/'+str(roi.id)+'*.tif'))
-                X = list(map(imread,X_files))
-                n_channel = 3 if X[0].ndim == 3 else X[0].shape[-1]
-                axis_norm = (0,1)   # normalize channels independently  (0,1,2) normalize channels jointly
-                if n_channel > 1:
-                    print("Normalizing image channels %s." % ('jointly' if axis_norm is None or 2 in axis_norm else 'independently'))
+                try:
+                    #Get Cytomine ROI coordinates for remapping to whole-slide
+                    #Cytomine cartesian coordinate system, (0,0) is bottom left corner
+                    print("----------------------------ROI------------------------------")
+                    roi_geometry = wkt.loads(roi.location)
+                    print("ROI Geometry from Shapely: {}".format(roi_geometry))
+                    print("ROI Bounds")
+                    print(roi_geometry.bounds)
+                    min_x=roi_geometry.bounds[0]
+                    min_y=roi_geometry.bounds[1]
+                    max_x=roi_geometry.bounds[2]
+                    max_y=roi_geometry.bounds[3]
+                    #Dump ROI image into local PNG file
+                    roi_path=os.path.join(working_path,str(roi_annotations.project)+'/'+str(roi_annotations.image)+'/'+str(roi.id))
+                    roi_png_filename=os.path.join(roi_path+'/'+str(roi.id)+'.png')
+                    print("roi_png_filename: %s" %roi_png_filename)
+                    is_algo = User().fetch(roi.user).algo
+                    roi.dump(dest_pattern=roi_png_filename,mask=True,alpha=not is_algo)
+                    #roi.dump(dest_pattern=os.path.join(roi_path,"{id}.png"), mask=True, alpha=True)
 
-                #Going over ROI images in ROI directory (in our case: one ROI per directory)
-                for x in range(0,len(X)):
-                    print("------------------- Processing ROI file %d: %s" %(x,roi_tif_filename))
-                    if stardist_model==1:
-                        X1=X[x]
-                    elif stardist_model==2:
-                        X2=X[x]
-                        X1=255 - X2[:,:,1]
+                    #Stardist works with TIFF images without alpha channel, flattening PNG alpha mask to TIFF RGB
+                    im=Image.open(roi_png_filename)
 
-                    img = normalize(X1, parameters.stardist_norm_perc_low, parameters.stardist_norm_perc_high, axis=axis_norm)
-                    n_tiles = modelsegment._guess_n_tiles(img)
-                    #Stardist model prediction with thresholds
-                    labels, details = modelsegment.predict_instances(img,
-                                                              prob_thresh=parameters.stardist_prob_t,
-                                                              nms_thresh=parameters.stardist_nms_t,
-                                                              n_tiles=n_tiles)
-                    print("Number of detected polygons: %d" %len(details['coord']))
-                    cytomine_annotations = AnnotationCollection()
-                    #Go over detections in this ROI, convert and upload to Cytomine
-                    for pos,polygroup in enumerate(details['coord'],start=1):
-                        #Converting to Shapely annotation
-                        points = list()
-                        for i in range(len(polygroup[0])):
-                            #Cytomine cartesian coordinate system, (0,0) is bottom left corner
-                            #Mapping Stardist polygon detection coordinates to Cytomine ROI in whole slide image
-                            x_ratio = (max_x-min_x)/im.size[0]
-                            y_ratio = (max_y-min_y)/im.size[1]
-                            p = Point(min_x+(polygroup[1][i]*x_ratio),max_y-(polygroup[0][i]*y_ratio))
-                            points.append(p)
+                    bg = Image.new("RGB", im.size, (255,255,255))
+                    bg.paste(im,mask=im.split()[3])
+                    roi_tif_filename=os.path.join(roi_path+'/'+str(roi.id)+'.tif')
+                    bg.save(roi_tif_filename,quality=100)
+                    X_files = sorted(glob(roi_path+'/'+str(roi.id)+'*.tif'))
+                    X = list(map(imread,X_files))
+                    n_channel = 3 if X[0].ndim == 3 else X[0].shape[-1]
+                    axis_norm = (0,1)   # normalize channels independently  (0,1,2) normalize channels jointly
+                    if n_channel > 1:
+                        print("Normalizing image channels %s." % ('jointly' if axis_norm is None or 2 in axis_norm else 'independently'))
 
-                        # print(points)
-                        annotation = Polygon(points)
-                        anno_area=annotation.area * (calibration_factor ** 2)
-                        print("area: ",anno_area)
-                        # print("length: ",annotation.wkt)
-                        if anno_area > area_th: 
-                            #Append to Annotation collection 
-                            cytomine_annotations.append(Annotation(location=annotation.wkt,
-                                                                   id_image=id_image,#conn.parameters.cytomine_id_image,
-                                                                   id_project=parameters.cytomine_id_project,
-                                                                   id_terms=[parameters.cytomine_id_cell_term]))
-                            print(".",end = '',flush=True)
+                    #Going over ROI images in ROI directory (in our case: one ROI per directory)
+                    for x in range(0,len(X)):
+                        print("------------------- Processing ROI file %d: %s" %(x,roi_tif_filename))
+                        if stardist_model==1:
+                            X1=X[x]
+                        elif stardist_model==2:
+                            #Preprocessing for PR-IHC
+                            X2=X[x]
+                            blurred_image = filters.gaussian(color.rgb2gray(X2), sigma=1.0)      
+                            mask = blurred_image > 0.8  # Adjust the threshold as needed                            
+                            # Use the mask to remove the background
+                            X2[mask] = [255, 255, 255]  # Set background pixels to black (0, 0, 0)                            
+                            X1=255 - X2[:,:,1]
 
-                    #Send Annotation Collection (for this ROI) to Cytomine server in one http request
-                    cytomine_annotations.save()
 
+                        img = normalize(X1, parameters.stardist_norm_perc_low, parameters.stardist_norm_perc_high, axis=axis_norm)
+                        n_tiles = modelsegment._guess_n_tiles(img)
+                        #Stardist model prediction with thresholds
+                        labels, details = modelsegment.predict_instances(img,
+                                                                  prob_thresh=parameters.stardist_prob_t,
+                                                                  nms_thresh=parameters.stardist_nms_t,
+                                                                  n_tiles=n_tiles)
+                        print("Number of detected polygons: %d" %len(details['coord']))
+                        cytomine_annotations = AnnotationCollection()
+                        #Go over detections in this ROI, convert and upload to Cytomine
+                        for pos,polygroup in enumerate(details['coord'],start=1):
+                            #Converting to Shapely annotation
+                            points = list()
+                            for i in range(len(polygroup[0])):
+                                #Cytomine cartesian coordinate system, (0,0) is bottom left corner
+                                #Mapping Stardist polygon detection coordinates to Cytomine ROI in whole slide image
+                                x_ratio = (max_x-min_x)/im.size[0]
+                                y_ratio = (max_y-min_y)/im.size[1]
+                                p = Point(min_x+(polygroup[1][i]*x_ratio),max_y-(polygroup[0][i]*y_ratio))
+                                points.append(p)
+
+                            annotation = Polygon(points)
+                            area=annotation.area * (calibration_factor ** 2)                        
+                            if area > area_th: 
+                                #Append to Annotation collection 
+                                cytomine_annotations.append(Annotation(location=annotation.wkt,
+                                                                       id_image=id_image,#conn.parameters.cytomine_id_image,
+                                                                       id_project=parameters.cytomine_id_project,
+                                                                       id_terms=[parameters.cytomine_id_cell_term]))
+                                print(".",end = '',flush=True)
+
+                        #Send Annotation Collection (for this ROI) to Cytomine server in one http request
+                        cytomine_annotations.save()
+                except:
+                    print("An exception occurred. Proceed with next annotations")
 
             roi_annotations = AnnotationCollection()
             roi_annotations.project = project.id
@@ -256,9 +256,6 @@ def run(cyto_job, parameters):
             roi_annotations.showWKT = True
             roi_annotations.fetch()
             # print(roi_annotations)
-
-            hue_all=[]
-            val_all=[]
 
             job.update(status=Job.RUNNING, progress=60, statusComment="Running classification on image...")
 
@@ -278,101 +275,91 @@ def run(cyto_job, parameters):
 
             #Go over ROI (nuclei) in this image
             for i, roi in enumerate(roi_annotations):
-                 
+                
                 for inc in increment:
                     if i==inc:
                         shutil.rmtree(roi_path, ignore_errors=True)
                         import gc
                         gc.collect()
                         print("i==", inc)
-                try:
-                    roi_geometry = wkt.loads(roi.location)
-                    # print("----------------------------Cells------------------------------")
-                    #Dump ROI image into local PNG file
-                    roi_path=os.path.join(working_path,str(roi_annotations.project)+'/'+str(roi_annotations.image)+'/')
-                    roi_png_filename=os.path.join(roi_path+str(roi.id)+'.png')
 
-                    ## --- ROI types: crop or alpha ---
-                    if roi_type==1: #alpha
-                        roi.dump(dest_pattern=roi_png_filename,mask=True)
-                    elif roi_type==2: #crop
-                        roi.dump(dest_pattern=roi_png_filename)
+                roi_geometry = wkt.loads(roi.location)
+
+                # print("----------------------------Cells------------------------------")
+                #Dump ROI image into local PNG file
+                roi_path=os.path.join(working_path,str(roi_annotations.project)+'/'+str(roi_annotations.image)+'/')
+                roi_png_filename=os.path.join(roi_path+str(roi.id)+'.png')
+
+                ## --- ROI types: crop or alpha ---
+                if roi_type==1: #alpha
+                    roi.dump(dest_pattern=roi_png_filename,mask=True)
+                elif roi_type==2: #crop
+                    roi.dump(dest_pattern=roi_png_filename)
+                    
+                roi.delete() #delete stardist annotation to avoid double annotations
                 
-                    roi.delete()
-                    
-                    J = cv2.imread(roi_png_filename,cv2.IMREAD_UNCHANGED)                    
-    #                     
-                    # #Start NWMS DenseNet classification 
-                    im = cv2.cvtColor(J,cv2.COLOR_BGR2RGB)
-                    im = cv2.resize(im,(224,224))
-                    im = im.reshape(-1,224,224,3)
-                    output = np.zeros((0,checkpoint["num_classes"]))
-                    arr_out_gpu = torch.from_numpy(im.transpose(0, 3, 1, 2)).type('torch.FloatTensor').to(device)
-                    output_batch = model(arr_out_gpu)
-                    output_batch = output_batch.detach().cpu().numpy()                
-                    output = np.append(output,output_batch,axis=0)
-                    pred_labels = np.argmax(output, axis=1)
-                    # pred_labels=[pred_labels]
-                    pred_all.append(pred_labels)
+                
+                J = cv2.imread(roi_png_filename,cv2.IMREAD_UNCHANGED)#                     
+                #Start NWMS DenseNet classification 
+                im = cv2.cvtColor(cv2.imread(roi_png_filename),cv2.COLOR_BGR2RGB)
+                im = cv2.resize(im,(224,224))
+                im = im.reshape(-1,224,224,3)
+                output = np.zeros((0,checkpoint["num_classes"]))
+                arr_out_gpu = torch.from_numpy(im.transpose(0, 3, 1, 2)).type('torch.FloatTensor').to(device)
+                output_batch = model(arr_out_gpu)
+                output_batch = output_batch.detach().cpu().numpy()                
+                output = np.append(output,output_batch,axis=0)
+                pred_labels = np.argmax(output, axis=1)
+                # pred_labels=[pred_labels]
+                pred_all.append(pred_labels)
 
-                    
-
-                    if pred_labels[0]==0:
-                        # print("Class 0: Negative")
-                        id_terms=parameters.cytomine_id_c0_term
-                        pred_c0=pred_c0+1
-                        # roi.dump(dest_pattern=os.path.join(roi_path+'Class0/'+str(roi.id)+'.png'),alpha=True)
-                    elif pred_labels[0]==1:
-                        # print("Class 1: Weak")
-                        id_terms=parameters.cytomine_id_c1_term
-                        pred_c1=pred_c1+1
-                        # roi.dump(dest_pattern=os.path.join(roi_path+'Class1/'+str(roi.id)+'.png'),alpha=True)
-                    elif pred_labels[0]==2:
-                        # print("Class 2: Moderate")
-                        id_terms=parameters.cytomine_id_c2_term
-                        pred_c2=pred_c2+1
-                        # roi.dump(dest_pattern=os.path.join(roi_path+'Class2/'+str(roi.id)+'.png'),alpha=True)
-                    elif pred_labels[0]==3:
-                        # print("Class 3: Strong")
-                        id_terms=parameters.cytomine_id_c3_term
-                        pred_c3=pred_c3+1
-                            
-                    # print(roi.term)  
-                    # AnnotationTerm(roi.id, id_terms=[id_terms]).save()
-                    # print(roi)
-                    cytomine_annotations = AnnotationCollection()
-                    annotation=roi_geometry
-                    cytomine_annotations.append(Annotation(location=annotation.wkt,#location=roi_geometry,
-                                                        id_image=id_image,#conn.parameters.cytomine_id_image,
-                                                        id_project=project.id,
-                                                        id_terms=[id_terms]))
-                    
-                    # Annotation().fetch(roi.id), key='Hue', value=str(hue_all[j]).save()
-                    
-
-                    
-                    print(".",end = '',flush=True)
+                if pred_labels[0]==0:
+                    # print("Class 0: Negative")
+                    id_terms=parameters.cytomine_id_c0_term
+                    pred_c0=pred_c0+1
+                    # roi.dump(dest_pattern=os.path.join(roi_path+'Class0/'+str(roi.id)+'.png'),alpha=True)
+                elif pred_labels[0]==1:
+                    # print("Class 1: Weak")
+                    id_terms=parameters.cytomine_id_c1_term
+                    pred_c1=pred_c1+1
+                    # roi.dump(dest_pattern=os.path.join(roi_path+'Class1/'+str(roi.id)+'.png'),alpha=True)
+                elif pred_labels[0]==2:
+                    # print("Class 2: Moderate")
+                    id_terms=parameters.cytomine_id_c2_term
+                    pred_c2=pred_c2+1
+                    # roi.dump(dest_pattern=os.path.join(roi_path+'Class2/'+str(roi.id)+'.png'),alpha=True)
+                elif pred_labels[0]==3:
+                    # print("Class 3: Strong")
+                    id_terms=parameters.cytomine_id_c3_term
+                    pred_c3=pred_c3+1
+                  
+                
+                cytomine_annotations = AnnotationCollection()
+                annotation=roi_geometry
+                
+                cytomine_annotations.append(Annotation(location=annotation.wkt,#location=roi_geometry,
+                                                       id_image=id_image,#conn.parameters.cytomine_id_image,
+                                                       id_project=project.id,
+                                                       id_terms=[id_terms]))
+                print(".",end = '',flush=True)
 
 
 
-                    #Send Annotation Collection (for this ROI) to Cytomine server in one http request
-                    ca = cytomine_annotations.save()
+                #Send Annotation Collection (for this ROI) to Cytomine server in one http request
+                ca = cytomine_annotations.save()
 
-                except:
-                    print("An exception occurred. Proceed with next annotations")
-           
-            cytomine_annotations = AnnotationCollection()    
-            cytomine_annotations.project = project.id
-            cytomine_annotations.image = id_image
-            cytomine_annotations.job = job.id
-            cytomine_annotations.user = user
-            cytomine_annotations.showAlgo = True
-            cytomine_annotations.showWKT = True
-            cytomine_annotations.showMeta = True
-            cytomine_annotations.showGIS = True
-            cytomine_annotations.showTerm = True
-            cytomine_annotations.annotation = True
-            cytomine_annotations.fetch()
+            # cytomine_annotations = AnnotationCollection()    
+            # cytomine_annotations.project = project.id
+            # cytomine_annotations.image = id_image
+            # cytomine_annotations.job = job.id
+            # cytomine_annotations.user = user
+            # cytomine_annotations.showAlgo = True
+            # cytomine_annotations.showWKT = True
+            # cytomine_annotations.showMeta = True
+            # cytomine_annotations.showGIS = True
+            # cytomine_annotations.showTerm = True
+            # cytomine_annotations.annotation = True
+            # cytomine_annotations.fetch()
 
 
             end_prediction_time=time.time()
