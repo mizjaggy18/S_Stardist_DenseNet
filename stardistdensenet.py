@@ -233,8 +233,8 @@ def run(cyto_job, parameters):
                                 p = Point(min_x+(polygroup[1][i]*x_ratio),max_y-(polygroup[0][i]*y_ratio))
                                 points.append(p)
 
-                            annotation = Polygon(points)
-                            area=annotation.area * (calibration_factor ** 2)                        
+                            annotation = Polygon(points) # coordinates denoting pixels
+                            area=annotation.area * (calibration_factor ** 2) # to convert annotation.area (in pixels) to micron2                
                             if area > area_th: 
                                 #Append to Annotation collection 
                                 cytomine_annotations.append(Annotation(location=annotation.wkt,
